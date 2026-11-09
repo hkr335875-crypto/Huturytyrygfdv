@@ -4,6 +4,7 @@ import {
   Plus,
   Trash2,
   Edit3,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { Assignment, ClassGroup, Student, Submission, SubmissionStatus } from '../types';
 import { toPersianDigits, normalizePersianText, findStudentSubmission } from '../utils/textNormalizer';
@@ -18,6 +19,7 @@ interface SubmissionTableProps {
   onManualAddSubmission: (student: Student) => void;
   onDeleteSubmission: (submissionId: string) => void;
   onLinkStudentBaleId?: (studentId: string, numericId: string) => void;
+  onViewPhotos?: (sub: Submission) => void;
 }
 
 export const SubmissionTable: React.FC<SubmissionTableProps> = ({
@@ -30,6 +32,7 @@ export const SubmissionTable: React.FC<SubmissionTableProps> = ({
   onManualAddSubmission,
   onDeleteSubmission,
   onLinkStudentBaleId,
+  onViewPhotos,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'submitted' | 'missing' | 'revision'>('all');
@@ -266,11 +269,21 @@ export const SubmissionTable: React.FC<SubmissionTableProps> = ({
                     {/* Status: Green 🟢 if submitted and approved, Red 🔴 if not */}
                     <td className="py-3 px-4">
                       {item.isSubmitted ? (
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex flex-col gap-1 items-start">
                           <span className="text-emerald-800 bg-emerald-50 border border-emerald-300 px-2.5 py-1 rounded text-[11px] font-semibold inline-flex items-center gap-1.5 shadow-2xs">
                             <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
                             <span>تأیید شد 🟢</span>
                           </span>
+                          {sub?.photos && sub.photos.length > 0 && (
+                            <button
+                              onClick={() => onViewPhotos && onViewPhotos(sub)}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-[10px] font-medium transition-colors"
+                              title="مشاهده عکس‌های ارسالی دانش‌آموز"
+                            >
+                              <ImageIcon className="w-3 h-3 text-blue-600" />
+                              <span>{toPersianDigits(sub.photos.length)} عکس ارسالی</span>
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <span className="text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-1 rounded text-[11px] font-semibold inline-flex items-center gap-1.5">

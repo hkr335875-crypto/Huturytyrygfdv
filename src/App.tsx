@@ -28,6 +28,10 @@ import { ReportModal } from './components/ReportModal';
 import { NewAssignmentModal } from './components/NewAssignmentModal';
 import { ResetConfirmModal } from './components/ResetConfirmModal';
 import { AdminSettingsModal } from './components/AdminSettingsModal';
+import { GroupAndIdsModal } from './components/GroupAndIdsModal';
+import { ServerStatusModal } from './components/ServerStatusModal';
+import { BroadcastModal } from './components/BroadcastModal';
+import { StudentPhotosModal } from './components/StudentPhotosModal';
 import {
   Assignment,
   BotConfig,
@@ -53,6 +57,15 @@ export default function App() {
   const [showReportModal, setShowReportModal] = useState(false);
   const [showResetModal, setShowResetModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showGroupAndIdsModal, setShowGroupAndIdsModal] = useState(false);
+  const [showServerStatusModal, setShowServerStatusModal] = useState(false);
+  const [showBroadcastModal, setShowBroadcastModal] = useState(false);
+  const [selectedPhotoSubmission, setSelectedPhotoSubmission] = useState<Submission | null>(null);
+
+  // Group and Cloudflare URL states
+  const [targetGroupId, setTargetGroupId] = useState('-100123456789');
+  const [groupTitle, setGroupTitle] = useState('گروه کلاسی ادبیات');
+  const [cloudflareUrl, setCloudflareUrl] = useState('https://triple-hawaii-editor-rely.trycloudflare.com');
 
   // Bale Bot server connection indicator
   const [botStatusOk, setBotStatusOk] = useState(true);
@@ -61,6 +74,25 @@ export default function App() {
     messagesProcessed: number;
     lastPoll: string;
   } | null>(null);
+
+  // دریافت اطلاعات کلودفلر و شناسه گروه از سرور
+  useEffect(() => {
+    const fetchCloudflare = () => {
+      fetch('/api/cloudflare-info')
+        .then((res) => res.json())
+        .then((res) => {
+          if (res.success && res.data) {
+            if (res.data.cloudflareUrl) setCloudflareUrl(res.data.cloudflareUrl);
+            if (res.data.targetGroupId) setTargetGroupId(res.data.targetGroupId);
+            if (res.data.groupTitle) setGroupTitle(res.data.groupTitle);
+          }
+        })
+        .catch(() => {});
+    };
+    fetchCloudflare();
+    const interval = setInterval(fetchCloudflare, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   // دریافت داده‌های سرور در شروع برنامه
   useEffect(() => {
@@ -266,6 +298,58 @@ export default function App() {
     });
   };
 
+  // تغییر شناسه عددی توسط مالک (960742797)
+  const handleUpdateStudentNumericId = async (studentId: string, newId: string): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/owner/update-id', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ownerBaleId: '960742797',
+          studentId,
+          newNumericId: newId,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAppState((prev) => {
+          const nextStudents = prev.students.map((st) =>
+            st.id === studentId ? { ...st, baleUserId: newId } : st
+          );
+          const nextState = { ...prev, students: nextStudents };
+          saveAppState(nextState);
+          return nextState;
+        });
+        return true;
+      }
+    } catch (e) {
+      console.error('Failed to update student numeric ID', e);
+    }
+    return false;
+  };
+
+  // تغییر شناسه عددی گروه توسط مالک (960742797)
+  const handleUpdateGroupId = async (newGroupId: string): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/owner/update-group-id', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ownerBaleId: '960742797',
+          newGroupId,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTargetGroupId(newGroupId);
+        return true;
+      }
+    } catch (e) {
+      console.error('Failed to update group numeric ID', e);
+    }
+    return false;
+  };
+
   // Record submission from Bot Simulator
   const handleRecordFromBot = useCallback(
     (student: Student, rawMessage: string, logItem: BotLog) => {
@@ -468,6 +552,9 @@ export default function App() {
         onOpenNewAssignment={() => setShowNewAssignmentModal(true)}
         onOpenReport={() => setShowReportModal(true)}
         onOpenSettings={() => setShowSettingsModal(true)}
+        onOpenGroupAndIds={() => setShowGroupAndIdsModal(true)}
+        onOpenServerStatus={() => setShowServerStatusModal(true)}
+        onOpenBroadcast={() => setShowBroadcastModal(true)}
         botStatusOk={botStatusOk}
       />
 
@@ -487,6 +574,9 @@ export default function App() {
                 <span className="bg-emerald-700/80 text-emerald-200 text-[10px] px-2 py-0.5 rounded font-mono">
                   Online 24/7
                 </span>
+                <span className="bg-amber-400 text-slate-950 font-bold text-[10px] px-2 py-0.5 rounded font-mono">
+                  Cloudflare Live
+                </span>
               </div>
               <p className="text-xs text-emerald-100/90 mt-0.5 leading-relaxed">
                 دانش‌آموزان در هر ساعت می‌توانند عبارت دقیق «درود ارسال کردم» را به ربات بفرستند. پیام‌ها فوراً پردازش، ثبت و پاسخ داده می‌شوند.
@@ -495,6 +585,17 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
+            <a
+              href={cloudflareUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
+              title="باز کردن پیشخوان روی کلودفلر"
+            >
+              <span>لینک کلودفلر</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+
             <a
               href="https://ble.ir/Literaturebot"
               target="_blank"
@@ -553,6 +654,7 @@ export default function App() {
             onManualAddSubmission={handleManualAddSubmission}
             onDeleteSubmission={handleDeleteSubmission}
             onLinkStudentBaleId={handleLinkStudentBaleId}
+            onViewPhotos={(sub) => setSelectedPhotoSubmission(sub)}
           />
         )}
 
@@ -628,6 +730,36 @@ export default function App() {
         onClose={() => setShowSettingsModal(false)}
         config={appState.config}
         onSaveConfig={(cfg) => handleUpdateConfig(cfg)}
+      />
+
+      <GroupAndIdsModal
+        isOpen={showGroupAndIdsModal}
+        onClose={() => setShowGroupAndIdsModal(false)}
+        targetGroupId={targetGroupId}
+        groupTitle={groupTitle}
+        students={appState.students}
+        onUpdateStudentNumericId={handleUpdateStudentNumericId}
+        onUpdateGroupId={handleUpdateGroupId}
+        cloudflareUrl={cloudflareUrl}
+      />
+
+      <ServerStatusModal
+        isOpen={showServerStatusModal}
+        onClose={() => setShowServerStatusModal(false)}
+        onRestartPolling={() => fetch('/api/bale/restart-polling', { method: 'POST' })}
+      />
+
+      <BroadcastModal
+        isOpen={showBroadcastModal}
+        onClose={() => setShowBroadcastModal(false)}
+        students={appState.students}
+        targetGroupId={targetGroupId}
+      />
+
+      <StudentPhotosModal
+        isOpen={Boolean(selectedPhotoSubmission)}
+        onClose={() => setSelectedPhotoSubmission(null)}
+        submission={selectedPhotoSubmission}
       />
     </div>
   );

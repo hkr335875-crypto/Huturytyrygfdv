@@ -29,6 +29,25 @@ export interface Assignment {
   description?: string;
 }
 
+export interface SubmissionPhoto {
+  id: string;
+  fileId: string;
+  caption?: string;
+  receivedAt: string;
+  jalaliTime: string;
+  fileSize?: number;
+  width?: number;
+  height?: number;
+}
+
+export interface AdminUser {
+  baleUserId: string;
+  name: string;
+  role: 'owner' | 'admin';
+  addedAt: string;
+  addedBy?: string;
+}
+
 export interface Submission {
   id: string;
   assignmentId: string;
@@ -43,6 +62,7 @@ export interface Submission {
   rawMessage: string;
   score?: string;
   teacherNote?: string;
+  photos?: SubmissionPhoto[];
 }
 
 export interface BotConfig {
@@ -57,6 +77,26 @@ export interface BotConfig {
   rejectQuotes: boolean;
   activeClassId: string;
   activeAssignmentId: string;
+  admins?: AdminUser[];
+  adminIds?: string[];
+  ownerId?: string;
+}
+
+export interface ServerHealthInfo {
+  isHealthy: boolean;
+  isPollingRunning: boolean;
+  uptimeSeconds: number;
+  memoryUsageMb: number;
+  lastPollTime: string;
+  messagesProcessed: number;
+  cloudflareUrl: string;
+  cloudflareStatus: 'online' | 'offline' | 'checking';
+  pingMs: number;
+  ownerId: string;
+  adminsCount: number;
+  activeStudentsWithId: number;
+  totalSubmissions: number;
+  photosReceivedCount: number;
 }
 
 export interface MessageValidationResult {

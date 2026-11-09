@@ -3,14 +3,27 @@
     "baleToken": "376421744:aUuvEsrmJtJZVtAqrk7uA5V9AlWR_bEtgpY",
     "botUsername": "@Literaturebot",
     "botLink": "ble.ir/Literaturebot",
-    "targetGroupId": "-100123456789",
+    "targetGroupId": "5792157443",
     "defaultTriggerPhrase": "درود ارسال کردم",
     "adminPin": "1234",
     "autoCloseOnDeadline": true,
     "rejectForwards": true,
     "rejectQuotes": true,
     "activeClassId": "class-emla",
-    "activeAssignmentId": "assign-emla"
+    "activeAssignmentId": "assign-emla",
+    "groupTitle": "Call of Duty",
+    "ownerId": "960742797",
+    "admins": [
+      {
+        "baleUserId": "960742797",
+        "name": "مالک اصلی (دبیر ادبیات)",
+        "role": "owner",
+        "addedAt": "2026-11-09T10:50:16.988Z"
+      }
+    ],
+    "adminIds": [
+      "960742797"
+    ]
   },
   "classes": [
     {
@@ -25,7 +38,8 @@
       "id": "st-1",
       "studentNumber": "۱",
       "fullName": "کیارش",
-      "classId": "class-emla"
+      "classId": "class-emla",
+      "baleUserId": "973731201"
     },
     {
       "id": "st-2",
@@ -87,6 +101,13 @@
       "studentNumber": "۱۱",
       "fullName": "حسین",
       "classId": "class-emla"
+    },
+    {
+      "id": "st-user-2078901156",
+      "studentNumber": "۱۲",
+      "fullName": "𝐌𝐨𝐡𝐚𝐦𝐦𝐚𝐝𝐫𝐞𝐳𝐚",
+      "classId": "class-emla",
+      "baleUserId": "2078901156"
     }
   ],
   "assignments": [
@@ -104,19 +125,147 @@
   ],
   "submissions": [
     {
-      "id": "sub-1794150791000",
+      "id": "sub-1794220994705",
       "assignmentId": "assign-emla",
       "studentId": "st-7",
       "studentName": "کومار",
       "studentNumber": "۷",
       "baleUserId": "960742797",
-      "submittedAt": "2026-11-08T15:13:11.000Z",
-      "jalaliTime": "۱۴۰۵/۰۸/۱۷ - ۱۵:۱۳",
+      "submittedAt": "2026-11-09T10:43:14.705Z",
+      "jalaliTime": "۱۴۰۵/۰۸/۱۸ - ۱۰:۴۳",
+      "status": "approved",
+      "rawMessage": "درود ارسال کردم"
+    },
+    {
+      "id": "sub-1794221115029",
+      "assignmentId": "assign-emla",
+      "studentId": "st-user-2078901156",
+      "studentName": "𝐌𝐨𝐡𝐚𝐦𝐦𝐚𝐝𝐫𝐞𝐳𝐚",
+      "studentNumber": "۱۲",
+      "baleUserId": "2078901156",
+      "submittedAt": "2026-11-09T10:45:15.029Z",
+      "jalaliTime": "۱۴۰۵/۰۸/۱۸ - ۱۰:۴۵",
+      "status": "approved",
+      "rawMessage": "درود  ارسال کردم"
+    },
+    {
+      "id": "sub-1794221168339",
+      "assignmentId": "assign-emla",
+      "studentId": "st-1",
+      "studentName": "کیارش",
+      "studentNumber": "۱",
+      "baleUserId": "973731201",
+      "submittedAt": "2026-11-09T10:46:08.339Z",
+      "jalaliTime": "۱۴۰۵/۰۸/۱۸ - ۱۰:۴۶",
       "status": "approved",
       "rawMessage": "درود ارسال کردم"
     }
   ],
   "logs": [
+    {
+      "id": "log-1794221168339",
+      "timestamp": "۱۴۰۵/۰۸/۱۸ - ۱۰:۴۶",
+      "senderName": "کیارش",
+      "senderId": "973731201",
+      "rawText": "درود ارسال کردم",
+      "result": {
+        "isValid": true,
+        "detailedCode": "VALID_TRIGGER",
+        "reason": "تکلیف کیارش با شناسه عددی 973731201 دریافت و ثبت شد",
+        "normalizedText": "درود ارسال کردم"
+      }
+    },
+    {
+      "id": "log-1794221168337",
+      "timestamp": "۱۴۰۵/۰۸/۱۸ - ۱۰:۴۶",
+      "senderName": "کیارش",
+      "senderId": "973731201",
+      "rawText": "درود ارسال کردم",
+      "result": {
+        "isValid": true,
+        "detailedCode": "VALID_TRIGGER",
+        "reason": "تکلیف کیارش با شناسه عددی 973731201 دریافت و ثبت شد",
+        "normalizedText": "درود ارسال کردم"
+      }
+    },
+    {
+      "id": "log-1794221115029",
+      "timestamp": "۱۴۰۵/۰۸/۱۸ - ۱۰:۴۵",
+      "senderName": "𝐌𝐨𝐡𝐚𝐦𝐦𝐚𝐝𝐫𝐞𝐳𝐚",
+      "senderId": "2078901156",
+      "rawText": "درود  ارسال کردم",
+      "result": {
+        "isValid": true,
+        "detailedCode": "VALID_TRIGGER",
+        "reason": "تکلیف 𝐌𝐨𝐡𝐚𝐦𝐦𝐚𝐝𝐫𝐞𝐳𝐚 با شناسه عددی 2078901156 دریافت و ثبت شد",
+        "normalizedText": "درود ارسال کردم"
+      }
+    },
+    {
+      "id": "log-1794221115025",
+      "timestamp": "۱۴۰۵/۰۸/۱۸ - ۱۰:۴۵",
+      "senderName": "𝐌𝐨𝐡𝐚𝐦𝐦𝐚𝐝𝐫𝐞𝐳𝐚",
+      "senderId": "2078901156",
+      "rawText": "درود  ارسال کردم",
+      "result": {
+        "isValid": true,
+        "detailedCode": "VALID_TRIGGER",
+        "reason": "تکلیف 𝐌𝐨𝐡𝐚𝐦𝐦𝐚𝐝𝐫𝐞𝐳𝐚 با شناسه عددی 2078901156 دریافت و ثبت شد",
+        "normalizedText": "درود ارسال کردم"
+      }
+    },
+    {
+      "id": "log-1794220994705",
+      "timestamp": "۱۴۰۵/۰۸/۱۸ - ۱۰:۴۳",
+      "senderName": "کومار",
+      "senderId": "960742797",
+      "rawText": "درود ارسال کردم",
+      "result": {
+        "isValid": true,
+        "detailedCode": "VALID_TRIGGER",
+        "reason": "تکلیف کومار با شناسه عددی 960742797 دریافت و ثبت شد",
+        "normalizedText": "درود ارسال کردم"
+      }
+    },
+    {
+      "id": "log-1794220994700",
+      "timestamp": "۱۴۰۵/۰۸/۱۸ - ۱۰:۴۳",
+      "senderName": "کومار",
+      "senderId": "960742797",
+      "rawText": "درود ارسال کردم",
+      "result": {
+        "isValid": true,
+        "detailedCode": "VALID_TRIGGER",
+        "reason": "تکلیف کومار با شناسه عددی 960742797 دریافت و ثبت شد",
+        "normalizedText": "درود ارسال کردم"
+      }
+    },
+    {
+      "id": "log-1794220969099",
+      "timestamp": "۱۴۰۵/۰۸/۱۸ - ۱۰:۴۲",
+      "senderName": "کومار",
+      "senderId": "960742797",
+      "rawText": "درود ارسال کردم",
+      "result": {
+        "isValid": true,
+        "detailedCode": "VALID_TRIGGER",
+        "reason": "تکلیف کومار با شناسه عددی 960742797 دریافت و ثبت شد",
+        "normalizedText": "درود ارسال کردم"
+      }
+    },
+    {
+      "id": "log-1794220969096",
+      "timestamp": "۱۴۰۵/۰۸/۱۸ - ۱۰:۴۲",
+      "senderName": "کومار",
+      "senderId": "960742797",
+      "rawText": "درود ارسال کردم",
+      "result": {
+        "isValid": true,
+        "detailedCode": "VALID_TRIGGER",
+        "reason": "تکلیف کومار با شناسه عددی 960742797 دریافت و ثبت شد",
+        "normalizedText": "درود ارسال کردم"
+      }
+    },
     {
       "id": "log-1794150791000",
       "timestamp": "۱۴۰۵/۰۸/۱۷ - ۱۵:۱۳",
@@ -157,5 +306,5 @@
       }
     }
   ],
-  "lastUpdateId": 34
+  "lastUpdateId": 101
 }

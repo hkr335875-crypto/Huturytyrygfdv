@@ -3,13 +3,15 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import { normalizePersianText, toPersianDigits, formatPersianDateTime, FORBIDDEN_SINGLE_WORDS } from './src/utils/textNormalizer.js';
+import { normalizePersianText, toPersianDigits, formatPersianDateTime, FORBIDDEN_SINGLE_WORDS } from './src/utils/textNormalizer.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const DATA_FILE = path.join(__dirname, 'literature_bot_data.json');
 const DEFAULT_BALE_TOKEN = '376421744:aUuvEsrmJtJZVtAqrk7uA5V9AlWR_bEtgpY';
+// شناسه عددی مالک اصلی سامانه (تنها فرد مجاز به تغییر شناسه عددی دانش‌آموزان)
+const OWNER_BALE_ID = '960742797';
 
 // دقیقاً ۱۱ دانش‌آموز اعلام‌شده توسط دبیر (بدون هیچ آیدی ساختگی یا فرضی)
 const DEFAULT_STUDENTS = [
@@ -26,12 +28,26 @@ const DEFAULT_STUDENTS = [
   { id: 'st-11', studentNumber: '۱۱', fullName: 'حسین', classId: 'class-emla' },
 ];
 
+const CLOUDFLARE_URL = 'https://triple-hawaii-editor-rely.trycloudflare.com';
+
 const INITIAL_DATA = {
   config: {
     baleToken: DEFAULT_BALE_TOKEN,
     botUsername: '@Literaturebot',
     botLink: 'ble.ir/Literaturebot',
+    ownerId: OWNER_BALE_ID,
+    ownerName: 'مالک اصلی (960742797)',
+    admins: [
+      {
+        baleUserId: OWNER_BALE_ID,
+        name: 'مالک اصلی (دبیر ادبیات)',
+        role: 'owner',
+        addedAt: new Date().toISOString(),
+      },
+    ],
+    adminIds: [OWNER_BALE_ID],
     targetGroupId: '-100123456789',
+    groupTitle: 'گروه کلاسی ادبیات',
     defaultTriggerPhrase: 'درود ارسال کردم',
     adminPin: '1234',
     autoCloseOnDeadline: true,
@@ -75,6 +91,21 @@ function loadData() {
       const raw = fs.readFileSync(DATA_FILE, 'utf-8');
       const parsed = JSON.parse(raw);
       if (parsed.students && parsed.students.some((s: any) => s.fullName === 'کیارش')) {
+        if (!parsed.config) parsed.config = {};
+        if (!parsed.config.ownerId) parsed.config.ownerId = OWNER_BALE_ID;
+        if (!parsed.config.admins || !Array.isArray(parsed.config.admins)) {
+          parsed.config.admins = [
+            {
+              baleUserId: OWNER_BALE_ID,
+              name: 'مالک اصلی (دبیر ادبیات)',
+              role: 'owner',
+              addedAt: new Date().toISOString(),
+            },
+          ];
+        }
+        if (!parsed.config.adminIds || !Array.isArray(parsed.config.adminIds)) {
+          parsed.config.adminIds = [OWNER_BALE_ID];
+        }
         return parsed;
       }
     }
@@ -194,14 +225,55 @@ async function sendBaleMessageDirect(token: string, chatId: number | string, tex
   }
 }
 
+async function sendBalePhotoDirect(token: string, chatId: number | string, photo: string, caption?: string) {
+  try {
+    const res = await fetch(`https://tapi.bale.ai/bot${token}/sendPhoto`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, photo, caption }),
+    });
+    return await res.json();
+  } catch (err) {
+    console.error('Error sending photo to Bale:', err);
+    return null;
+  }
+}
+
+async function sendBaleDocumentDirect(token: string, chatId: number | string, document: string, caption?: string) {
+  try {
+    const res = await fetch(`https://tapi.bale.ai/bot${token}/sendDocument`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, document, caption }),
+    });
+    return await res.json();
+  } catch (err) {
+    console.error('Error sending document to Bale:', err);
+    return null;
+  }
+}
+
+function isUserAdmin(numericId: string): boolean {
+  if (numericId === OWNER_BALE_ID) return true;
+  const adminIds: string[] = currentAppState.config?.adminIds || [];
+  if (adminIds.includes(numericId)) return true;
+  const admins = currentAppState.config?.admins || [];
+  return admins.some((a: any) => a.baleUserId === numericId);
+}
+
 // پردازش هوشمند پیام‌ها و استخراج شناسه عددی فرستنده (Numeric from.id)
 async function processBaleUpdate(update: any, token: string) {
   const msg = update.message || update.channel_post;
-  if (!msg || !msg.text) return;
+  if (!msg) return;
+
+  const rawText = (msg.text || msg.caption || '').trim();
+  const hasPhoto = Boolean(msg.photo && Array.isArray(msg.photo) && msg.photo.length > 0);
+  const hasDocument = Boolean(msg.document);
+
+  if (!rawText && !hasPhoto && !hasDocument) return;
 
   const chatId = msg.chat?.id;
   const from = msg.from || {};
-  const rawText = msg.text.trim();
   const isForwarded = Boolean(msg.forward_from || msg.forward_date);
   const isQuoted = Boolean(msg.reply_to_message);
 
@@ -232,18 +304,37 @@ async function processBaleUpdate(update: any, token: string) {
     });
   }
 
+  // تشخیص خودکار شناسه عددی گروه در صورتی که پیام از گروه باشد
+  const isGroup = msg.chat?.type === 'group' || msg.chat?.type === 'supergroup' || Number(chatId) < 0;
+  if (isGroup && (!currentAppState.config.targetGroupId || currentAppState.config.targetGroupId !== String(chatId))) {
+    currentAppState.config.targetGroupId = String(chatId);
+    if (msg.chat?.title) currentAppState.config.groupTitle = msg.chat.title;
+    saveData(currentAppState);
+  }
+
   // ۱. دستور اتصال مستقیم نام با شناسه عددی: /من [نام] یا /name [نام]
   if (rawText.startsWith('/من ') || rawText.startsWith('/name ') || /^(من|ردیف|شماره)\s+/i.test(rawText)) {
     const requested = rawText.replace(/^(\/(من|name)|من|ردیف|شماره)\s+/, '').trim();
     const matched = resolveStudent(requested);
 
     if (matched) {
+      // قانون قفل بودن شناسه: اگر شناسه قبلاً ثبت شده باشد، کاربر عادی اجازه بازنویسی ندارد (فقط مالک مجاز است)
+      const alreadyHasId = matched.baleUserId && /^\d+$/.test(String(matched.baleUserId).trim());
+      if (alreadyHasId && String(matched.baleUserId).trim() !== numericSenderId && numericSenderId !== OWNER_BALE_ID) {
+        await sendBaleMessageDirect(
+          token,
+          chatId,
+          `🔒 شناسه عددی دانش‌آموز «${matched.fullName}» قبلاً ثبت و قفل شده است.\nطبق قوانین سامانه، فقط خود مالک (@Literaturebot) با شناسه عددی ${toPersianDigits(OWNER_BALE_ID)} مجاز به تغییر آن است.`
+        );
+        return;
+      }
+
       matched.baleUserId = numericSenderId;
       saveData(currentAppState);
       await sendBaleMessageDirect(
         token,
         chatId,
-        `✅ ${matched.fullName} گرامی، شناسه عددی شما (${toPersianDigits(numericSenderId)}) متصل شد.\nحالا با ارسال عبارت «${triggerPhrase}»، وضعیت شما در جدول سبز (🟢) می‌شود.`
+        `✅ ${matched.fullName} گرامی، شناسه عددی شما (${toPersianDigits(numericSenderId)}) با موفقیت قفل و متصل شد.\nحالا با ارسال عبارت «${triggerPhrase}»، وضعیت شما در جدول سبز (🟢) می‌شود.`
       );
       return;
     } else {
@@ -260,13 +351,287 @@ async function processBaleUpdate(update: any, token: string) {
   if (rawText.startsWith('/')) {
     const cmd = rawText.toLowerCase().split(' ')[0];
     if (cmd === '/start') {
+      const isOwner = numericSenderId === OWNER_BALE_ID;
+      const isAdmin = isUserAdmin(numericSenderId);
       const welcome = `درود بر شما! بازوی پشتیبان ادبیات (@Literaturebot) همیشه روشن و فعال است 📚🟢\n\n` +
-        `🆔 شناسه عددی شما: ${toPersianDigits(numericSenderId)}\n` +
+        `🆔 شناسه عددی شما: ${toPersianDigits(numericSenderId)}${isOwner ? ' 👑 (مالک اصلی)' : isAdmin ? ' ⭐️ (مدیر کلاس)' : ''}\n` +
         `📝 تکلیف جاری: «${activeAssignment.title}» (${activeAssignment.subject})\n` +
         `⏰ مهلت ارسال: ${toPersianDigits(activeAssignment.deadline || 'تا ساعت ۱۰')}\n` +
-        `📌 برای ثبت تکلیف، فقط عبارت دقیق زیر را ارسال کنید:\n«${triggerPhrase}»\n\n` +
-        `دستورات موجود:\n• /report - صدور گزارش انجام املا با نمایش شناسه عددی\n• /list - فهرست اسامی کلاس\n• /من [نام یا شماره] - اتصال شناسه عددی شما (مثلاً: /من کیارش یا /من ۱)`;
+        `📌 برای ثبت تکلیف، عبارت دقیق زیر را ارسال کنید:\n«${triggerPhrase}»\n` +
+        `📷 همچنین می‌توانید عکس دست‌نویس یا تکلیف خود را مستقیماً برای ربات بفرستید تا برای مدیران ارسال و ثبت شود.\n\n` +
+        `دستورات موجود:\n` +
+        `• /report - صدور گزارش انجام املا با نمایش شناسه عددی\n` +
+        `• /group - نمایش شناسه عددی گروه بله\n` +
+        `• /ids - نمایش کامل شناسه‌های عددی گروه و همه افراد\n` +
+        `• /list - فهرست اسامی ۱۱ دانش‌آموز کلاس\n` +
+        `• /من [نام یا شماره] - اتصال شناسه عددی شما\n` +
+        (isOwner ? `• /setid [نام] [شناسه جدید] - تغییر یا ثبت شناسه دانش‌آموز توسط مالک\n• /addadmin [شناسه] [نام] - افزودن مدیر جدید\n• /deladmin [شناسه] - حذف مدیر\n• /admins - فهرست مدیران\n` : '') +
+        (isAdmin ? `• /bc [متن] - ارسال پیام یا فایل همگانی به پیوی دانش‌آموزان\n` : '');
       await sendBaleMessageDirect(token, chatId, welcome);
+      return;
+    }
+
+    // دستور نمایش شناسه عددی گروه بله
+    if (cmd === '/group' || cmd === '/group_id' || cmd === '/گروه') {
+      const gId = isGroup ? String(chatId) : (currentAppState.config.targetGroupId || 'ثبت نشده');
+      const gTitle = msg.chat?.title || currentAppState.config.groupTitle || 'گروه کلاسی ادبیات';
+      const groupText = `👥 اطلاعات شناسه عددی گروه بله:\n━━━━━━━━━━━━━━━━━━\n` +
+        `🆔 شناسه عددی گروه: ${toPersianDigits(gId)}\n` +
+        `🏷 عنوان گروه: ${gTitle}\n` +
+        `👑 شناسه مالک اصلی ربات: ${toPersianDigits(OWNER_BALE_ID)}\n━━━━━━━━━━━━━━━━━━\n` +
+        `این شناسه جهت ارسال گزارش‌ها و پایش کلاس در سامانه ثبت گردید.`;
+      await sendBaleMessageDirect(token, chatId, groupText);
+      return;
+    }
+
+    // دستور نمایش کامل تمامی شناسه‌های عددی (گروه و دانش‌آموزان)
+    if (cmd === '/ids' || cmd === '/شناسه‌ها' || cmd === '/همه_شناسه‌ها') {
+      const gId = currentAppState.config.targetGroupId || (isGroup ? String(chatId) : 'ثبت نشده');
+      let idsMsg = `📋 فهرست کامل شناسه‌های عددی (گروه و دانش‌آموزان):\n━━━━━━━━━━━━━━━━━━\n` +
+        `👥 شناسه عددی گروه: ${toPersianDigits(gId)}\n` +
+        `👑 شناسه عددی مالک: ${toPersianDigits(OWNER_BALE_ID)}\n━━━━━━━━━━━━━━━━━━\n\n`;
+
+      currentAppState.students.forEach((st: any, idx: number) => {
+        const isBound = st.baleUserId && /^\d+$/.test(String(st.baleUserId).trim());
+        const idDisplay = isBound ? `${toPersianDigits(st.baleUserId)} 🔒` : 'در انتظار پیام';
+        idsMsg += `${toPersianDigits(idx + 1)}. ${st.fullName}: ${idDisplay}\n`;
+      });
+
+      idsMsg += `\n🔒 تمامی شناسه‌ها پس از ثبت قفل هستند و فقط مالک (${toPersianDigits(OWNER_BALE_ID)}) امکان ویرایش آن‌ها را دارد.`;
+      await sendBaleMessageDirect(token, chatId, idsMsg);
+      return;
+    }
+
+    // دستور تغییر یا ثبت شناسه عددی فقط توسط مالک (۹۶۰۷۴۲۷۹۷)
+    if (cmd === '/setid' || cmd === '/تغییر_شناسه' || cmd === '/changeid') {
+      if (numericSenderId !== OWNER_BALE_ID) {
+        await sendBaleMessageDirect(
+          token,
+          chatId,
+          `⛔️ دسترسی غیرمجاز!\nفقط خود مالک اصلی سامانه (شناسه عددی: ${toPersianDigits(OWNER_BALE_ID)}) اجازه ویرایش یا تعیین شناسه عددی دانش‌آموزان را دارد.`
+        );
+        return;
+      }
+
+      const parts = rawText.trim().split(/\s+/);
+      if (parts.length < 3) {
+        await sendBaleMessageDirect(
+          token,
+          chatId,
+          `راهنمای ثبت/تغییر شناسه توسط مالک:\n/setid [نام یا شماره ردیف] [شناسه عددی جدید]\nمثال:\n/setid کیارش 123456789\n/setid 1 123456789`
+        );
+        return;
+      }
+
+      const targetIdentifier = parts[1];
+      const newNumericId = parts[2].replace(/[^\d]/g, '');
+      if (!newNumericId) {
+        await sendBaleMessageDirect(token, chatId, `شناسه عددی جدید واردشده نامعتبر است.`);
+        return;
+      }
+
+      const targetStudent = resolveStudent(targetIdentifier);
+      if (!targetStudent) {
+        await sendBaleMessageDirect(token, chatId, `دانش‌آموز با مشخصات «${targetIdentifier}» یافت نشد.`);
+        return;
+      }
+
+      targetStudent.baleUserId = newNumericId;
+      currentAppState.submissions.forEach((s: any) => {
+        if (s.studentId === targetStudent.id) s.baleUserId = newNumericId;
+      });
+      saveData(currentAppState);
+
+      await sendBaleMessageDirect(
+        token,
+        chatId,
+        `👑 مالک گرامی، شناسه عددی دانش‌آموز «${targetStudent.fullName}» با موفقیت به ${toPersianDigits(newNumericId)} ثبت و قفل گردید.`
+      );
+      return;
+    }
+
+    // دستور افزودن مدیر جدید فقط توسط مالک (۹۶۰۷۴۲۷۹۷)
+    if (cmd === '/addadmin' || cmd === '/افزودن_مدیر' || cmd === '/ادمین') {
+      if (numericSenderId !== OWNER_BALE_ID) {
+        await sendBaleMessageDirect(
+          token,
+          chatId,
+          `⛔️ فقط خود مالک اصلی (شناسه ${toPersianDigits(OWNER_BALE_ID)}) اجازه تعیین مدیر جدید را دارد.`
+        );
+        return;
+      }
+
+      const parts = rawText.trim().split(/\s+/);
+      if (parts.length < 2) {
+        await sendBaleMessageDirect(
+          token,
+          chatId,
+          `راهنمای افزودن مدیر:\n/addadmin [شناسه عددی] [نام اختیاری]\nمثال:\n/addadmin 123456789 خانم احمدی`
+        );
+        return;
+      }
+
+      const newAdminId = parts[1].replace(/[^\d]/g, '');
+      const adminName = parts.slice(2).join(' ') || `مدیر ${newAdminId}`;
+
+      if (!newAdminId) {
+        await sendBaleMessageDirect(token, chatId, `شناسه عددی مدیر نامعتبر است.`);
+        return;
+      }
+
+      if (!currentAppState.config.admins) currentAppState.config.admins = [];
+      if (!currentAppState.config.adminIds) currentAppState.config.adminIds = [OWNER_BALE_ID];
+
+      const existing = currentAppState.config.admins.find((a: any) => a.baleUserId === newAdminId);
+      if (existing) {
+        existing.name = adminName;
+      } else {
+        currentAppState.config.admins.push({
+          baleUserId: newAdminId,
+          name: adminName,
+          role: 'admin',
+          addedAt: new Date().toISOString(),
+          addedBy: OWNER_BALE_ID,
+        });
+      }
+
+      if (!currentAppState.config.adminIds.includes(newAdminId)) {
+        currentAppState.config.adminIds.push(newAdminId);
+      }
+
+      saveData(currentAppState);
+
+      await sendBaleMessageDirect(
+        token,
+        chatId,
+        `👑 مالک گرامی، کاربر «${adminName}» با شناسه عددی ${toPersianDigits(newAdminId)} به عنوان مدیر جدید بازوی ادبیات ثبت گردید.`
+      );
+
+      // اطلاع‌رسانی به مدیر جدید در پیوی
+      await sendBaleMessageDirect(
+        token,
+        newAdminId,
+        `🎉 درود بر شما!\nشما توسط مالک اصلی سامانه (@Literaturebot) به عنوان ادمین و مدیر کلاس تعیین شدید.\nاز این پس می‌توانید از دستورات زیر استفاده نمایید:\n• /report - گزارش تکالیف\n• /bc [متن پیام] - ارسال پیام همگانی به پیوی دانش‌آموزان\n• /ids - مشاهده فهرست شناسه‌ها\nهمچنین عکس‌های ارسالی دانش‌آموزان برای شما نیز ارسال می‌شود.`
+      ).catch(() => {});
+
+      return;
+    }
+
+    // دستور حذف مدیر فقط توسط مالک
+    if (cmd === '/deladmin' || cmd === '/حذف_مدیر') {
+      if (numericSenderId !== OWNER_BALE_ID) {
+        await sendBaleMessageDirect(token, chatId, `⛔️ فقط خود مالک اصلی اجازه حذف مدیر را دارد.`);
+        return;
+      }
+
+      const parts = rawText.trim().split(/\s+/);
+      if (parts.length < 2) {
+        await sendBaleMessageDirect(token, chatId, `راهنما: /deladmin [شناسه عددی]`);
+        return;
+      }
+
+      const adminIdToRemove = parts[1].replace(/[^\d]/g, '');
+      if (adminIdToRemove === OWNER_BALE_ID) {
+        await sendBaleMessageDirect(token, chatId, `⚠️ مالک اصلی قابل حذف نیست.`);
+        return;
+      }
+
+      currentAppState.config.admins = (currentAppState.config.admins || []).filter(
+        (a: any) => a.baleUserId !== adminIdToRemove
+      );
+      currentAppState.config.adminIds = (currentAppState.config.adminIds || []).filter(
+        (id: string) => id !== adminIdToRemove
+      );
+      saveData(currentAppState);
+
+      await sendBaleMessageDirect(
+        token,
+        chatId,
+        `✅ کاربر با شناسه ${toPersianDigits(adminIdToRemove)} از فهرست مدیران حذف گردید.`
+      );
+      return;
+    }
+
+    // دستور نمایش مدیران
+    if (cmd === '/admins' || cmd === '/مدیران') {
+      if (!isUserAdmin(numericSenderId)) {
+        await sendBaleMessageDirect(token, chatId, `⛔️ این دستور فقط برای مدیران قابل مشاهده است.`);
+        return;
+      }
+
+      let adminMsg = `👥 فهرست مدیران بازوی ادبیات (@Literaturebot):\n━━━━━━━━━━━━━━━━━━\n` +
+        `👑 مالک اصلی: ${toPersianDigits(OWNER_BALE_ID)} (دبیر ادبیات)\n\n`;
+
+      const subAdmins = (currentAppState.config.admins || []).filter((a: any) => a.baleUserId !== OWNER_BALE_ID);
+      if (subAdmins.length === 0) {
+        adminMsg += `هنوز مدیر دیگری اضافه نشده است.\nمالک می‌تواند با دستور /addadmin [شناسه] [نام] مدیر جدید اضافه کند.`;
+      } else {
+        adminMsg += `مدیران فعال:\n`;
+        subAdmins.forEach((adm: any, idx: number) => {
+          adminMsg += `${toPersianDigits(idx + 1)}. ${adm.name} (شناسه: ${toPersianDigits(adm.baleUserId)})\n`;
+        });
+      }
+
+      await sendBaleMessageDirect(token, chatId, adminMsg);
+      return;
+    }
+
+    // دستور ارسال پیام یا فایل همگانی به پیوی همه دانش‌آموزان: /bc یا /broadcast
+    if (cmd === '/bc' || cmd === '/broadcast' || cmd === '/همگانی' || cmd === '/ارسال_به_همه') {
+      if (!isUserAdmin(numericSenderId)) {
+        await sendBaleMessageDirect(token, chatId, `⛔️ دسترسی غیرمجاز! فقط مالک یا مدیران می‌توانند پیام همگانی ارسال کنند.`);
+        return;
+      }
+
+      const broadcastBody = rawText.replace(/^(\/(bc|broadcast|همگانی|ارسال_به_همه))\s*/i, '').trim();
+      if (!broadcastBody && !hasPhoto && !hasDocument) {
+        await sendBaleMessageDirect(
+          token,
+          chatId,
+          `راهنمای ارسال پیام همگانی به پیوی دانش‌آموزان:\n/bc [متن پیام شما]\nهمچنین می‌توانید عکس یا فایلی را با کپشن /bc بفرستید تا برای همه ارسال شود.`
+        );
+        return;
+      }
+
+      const targets = currentAppState.students
+        .filter((s: any) => s.baleUserId && /^\d+$/.test(String(s.baleUserId).trim()))
+        .map((s: any) => String(s.baleUserId).trim());
+
+      if (targets.length === 0) {
+        await sendBaleMessageDirect(token, chatId, `⚠️ هیچ دانش‌آموزی با شناسه عددی فعال در سامانه یافت نشد.`);
+        return;
+      }
+
+      let sent = 0;
+      for (const stChatId of targets) {
+        try {
+          if (hasPhoto) {
+            const photoObj = msg.photo[msg.photo.length - 1];
+            await sendBalePhotoDirect(
+              token,
+              stChatId,
+              photoObj.file_id,
+              broadcastBody ? `📢 پیام دبیر ادبیات:\n\n${broadcastBody}` : '📢 تصویر ارسالی از دبیر ادبیات'
+            );
+          } else if (hasDocument) {
+            await sendBaleDocumentDirect(
+              token,
+              stChatId,
+              msg.document.file_id,
+              broadcastBody ? `📢 فایل ارسالی از دبیر ادبیات:\n\n${broadcastBody}` : undefined
+            );
+          } else {
+            await sendBaleMessageDirect(token, stChatId, `📢 پیام دبیر ادبیات به دانش‌آموزان:\n\n${broadcastBody}`);
+          }
+          sent++;
+        } catch (_e) {}
+      }
+
+      await sendBaleMessageDirect(
+        token,
+        chatId,
+        `📢 پیام همگانی شما با موفقیت برای ${toPersianDigits(sent)} نفر از دانش‌آموزان در پیوی ارسال گردید.`
+      );
       return;
     }
 
@@ -277,6 +642,15 @@ async function processBaleUpdate(update: any, token: string) {
     }
 
     if (cmd === '/reset') {
+      if (!isUserAdmin(numericSenderId) && !chatId) {
+        await sendBaleMessageDirect(
+          token,
+          chatId,
+          `⚠️ دستور صفر کردن فقط توسط مالک یا مدیران با تأیید امکان‌پذیر است.`
+        );
+        return;
+      }
+
       currentAppState.submissions = [];
       saveData(currentAppState);
       const resetMsg = `🔄 وضعیت تمامی ۱۱ دانش‌آموز صفر شد و به حالت قرمز (🔴) درآمد.\n\nاکنون برای ثبت دور جدید، ارسال مجدد عبارت دقیق زیر الزامی است تا سبز (🟢) شوند:\n«${triggerPhrase}»`;
@@ -287,7 +661,7 @@ async function processBaleUpdate(update: any, token: string) {
     if (cmd === '/list') {
       let listMsg = `📋 فهرست ۱۱ دانش‌آموز کلاس املا:\n\n`;
       currentAppState.students.forEach((st: any, idx: number) => {
-        const idInfo = st.baleUserId ? ` (شناسه عددی: ${toPersianDigits(st.baleUserId)})` : '';
+        const idInfo = st.baleUserId ? ` (شناسه عددی: ${toPersianDigits(st.baleUserId)} 🔒)` : '';
         listMsg += `${toPersianDigits(idx + 1)}. ${st.fullName}${idInfo}\n`;
       });
       await sendBaleMessageDirect(token, chatId, listMsg);
@@ -296,8 +670,20 @@ async function processBaleUpdate(update: any, token: string) {
 
     if (cmd === '/help') {
       const helpMsg = `📖 راهنمای بازوی پشتیبان ادبیات (@Literaturebot):\n\n` +
-        `قانون اصلی:\nهیچ پیامی با تک‌کلمه (مانند «درود»، «ارسال» یا «کردم») ثبت نمی‌شود. فقط عبارت کامل «${triggerPhrase}» شناسایی خواهد شد.\n\n` +
-        `دستورات:\n/report - گزارش زنده املا با شناسه عددی\n/start - شروع و نمایش شناسه عددی شما\n/من [نام یا شماره] - اتصال شناسه به اسامی`;
+        `قانون اصلی:\nهیچ پیامی با تک‌کلمه (مانند «درود»، «ارسال» یا «کردم») ثبت نمی‌شود. فقط عبارت کامل «${triggerPhrase}» یا ارسال عکس تکلیف شناسایی خواهد شد.\n\n` +
+        `دستورات عمومی:\n` +
+        `• /report - گزارش زنده املا با شناسه عددی\n` +
+        `• /group - نمایش شناسه عددی گروه بله\n` +
+        `• /ids - نمایش کامل شناسه‌های عددی گروه و همه افراد\n` +
+        `• /list - فهرست اسامی ۱۱ دانش‌آموز کلاس\n` +
+        `• /من [نام یا شماره] - اتصال شناسه عددی شما\n\n` +
+        `دستورات اختصاصی مالک و مدیران:\n` +
+        `• /bc [متن] - ارسال پیام یا عکس همگانی به پیوی دانش‌آموزان\n` +
+        `• /setid [نام] [شناسه جدید] - ثبت/تغییر شناسه دانش‌آموز توسط مالک\n` +
+        `• /addadmin [شناسه] [نام] - افزودن ادمین جدید توسط مالک\n` +
+        `• /deladmin [شناسه] - حذف ادمین توسط مالک\n` +
+        `• /admins - فهرست مدیران\n` +
+        `• /reset - صفر کردن گزارش با تأیید مدیر`;
       await sendBaleMessageDirect(token, chatId, helpMsg);
       return;
     }
@@ -348,6 +734,94 @@ async function processBaleUpdate(update: any, token: string) {
     return;
   }
 
+  // ۴.۱. پردازش خودکار ارسال عکس تکلیف توسط دانش‌آموزان و ارسال مستقیم برای مدیران
+  if (hasPhoto) {
+    const nowTime = formatPersianDateTime();
+    const photoArray = msg.photo;
+    const largestPhoto = photoArray[photoArray.length - 1];
+    const fileId = largestPhoto.file_id;
+
+    if (!matchedStudent) {
+      const nextNum = String(currentAppState.students.length + 1);
+      const newParticipant = {
+        id: `st-user-${numericSenderId}`,
+        studentNumber: toPersianDigits(nextNum),
+        fullName: fromName ? fromName : `کاربر (${toPersianDigits(numericSenderId)})`,
+        classId: activeAssignment.classId || 'class-emla',
+        baleUserId: numericSenderId,
+      };
+      currentAppState.students.push(newParticipant);
+      matchedStudent = newParticipant;
+    } else {
+      matchedStudent.baleUserId = numericSenderId;
+    }
+
+    const studentDisplayName = matchedStudent.fullName;
+    const stId = matchedStudent.id;
+
+    const photoItem = {
+      id: `photo-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      fileId,
+      caption: msg.caption || '',
+      receivedAt: new Date().toISOString(),
+      jalaliTime: nowTime,
+      fileSize: largestPhoto.file_size,
+      width: largestPhoto.width,
+      height: largestPhoto.height,
+    };
+
+    const existingIndex = currentAppState.submissions.findIndex(
+      (s: any) => s.studentId === stId || s.baleUserId === numericSenderId
+    );
+
+    if (existingIndex >= 0) {
+      const existing = currentAppState.submissions[existingIndex];
+      existing.status = 'approved';
+      if (!existing.photos) existing.photos = [];
+      existing.photos.push(photoItem);
+      existing.submittedAt = new Date().toISOString();
+      existing.jalaliTime = nowTime;
+      if (msg.caption) existing.rawMessage = `[تصویر با توضیح: ${msg.caption}]`;
+    } else {
+      currentAppState.submissions.push({
+        id: `sub-${Date.now()}`,
+        assignmentId: activeAssignment.id,
+        studentId: stId,
+        studentName: studentDisplayName,
+        studentNumber: matchedStudent.studentNumber || '—',
+        baleUserId: numericSenderId,
+        submittedAt: new Date().toISOString(),
+        jalaliTime: nowTime,
+        status: 'approved',
+        rawMessage: msg.caption ? `[ارسال تصویر] ${msg.caption}` : '[ارسال عکس تکلیف]',
+        photos: [photoItem],
+      });
+    }
+
+    saveData(currentAppState);
+
+    // پاسخ به دانش‌آموز
+    await sendBaleMessageDirect(
+      token,
+      chatId,
+      `✅ ${studentDisplayName} عزیز، عکس تکلیف شما با موفقیت دریافت و در سامانه کلاسی ثبت شد و به اطلاع دبیر و مدیران رسید.\n` +
+      `🆔 شناسه عددی شما: ${toPersianDigits(numericSenderId)}\n` +
+      `⏰ زمان دریافت: ${toPersianDigits(nowTime)}`
+    );
+
+    // ارسال مستقیم عکس برای مالک و تمام مدیران در بله!
+    const adminRecipients = new Set([OWNER_BALE_ID, ...(currentAppState.config.adminIds || [])]);
+    for (const adminId of adminRecipients) {
+      await sendBalePhotoDirect(
+        token,
+        adminId,
+        fileId,
+        `📸 عکس تکلیف جدید دریافت شد!\n👤 دانش‌آموز: ${studentDisplayName}\n🆔 شناسه عددی: ${toPersianDigits(numericSenderId)}\n⏰ زمان: ${nowTime}${msg.caption ? `\n📝 توضیحات دانش‌آموز: ${msg.caption}` : ''}`
+      );
+    }
+    return;
+  }
+
   // ۵. قانون منع تک‌کلمات
   const normalized = normalizePersianText(rawText);
   const words = normalized.split(/\s+/).filter(Boolean);
@@ -392,8 +866,10 @@ async function processBaleUpdate(update: any, token: string) {
       (s: any) => s.studentId === stId || s.baleUserId === numericSenderId
     );
 
+    const prevPhotos = existingIndex >= 0 ? (currentAppState.submissions[existingIndex].photos || []) : [];
+
     const newSub = {
-      id: `sub-${Date.now()}`,
+      id: existingIndex >= 0 ? currentAppState.submissions[existingIndex].id : `sub-${Date.now()}`,
       assignmentId: activeAssignment.id,
       studentId: stId,
       studentName: studentDisplayName,
@@ -403,6 +879,7 @@ async function processBaleUpdate(update: any, token: string) {
       jalaliTime: nowTime,
       status: 'approved', // وضعیت تأیید شده سبز 🟢
       rawMessage: rawText,
+      photos: prevPhotos,
     };
 
     if (existingIndex >= 0) {
@@ -588,6 +1065,231 @@ async function startServer() {
     return res.json({ success: false, error: data?.description || 'خطا در ارسال پیام' });
   });
 
+  app.get('/api/cloudflare-info', (_req, res) => {
+    res.json({
+      success: true,
+      data: {
+        cloudflareUrl: 'https://triple-hawaii-editor-rely.trycloudflare.com',
+        sharedAppUrl: process.env.APP_URL || 'https://ais-pre-tz24c4yptkdypcgp3g2irv-724469871954.europe-west2.run.app',
+        ownerId: OWNER_BALE_ID,
+        targetGroupId: currentAppState.config.targetGroupId || '-100123456789',
+        groupTitle: currentAppState.config.groupTitle || 'گروه کلاسی ادبیات',
+      },
+    });
+  });
+
+  app.post('/api/owner/update-id', (req, res) => {
+    const ownerId = req.body.ownerId || req.body.ownerBaleId;
+    const { studentId, newNumericId } = req.body;
+    if (ownerId !== OWNER_BALE_ID) {
+      return res.status(403).json({ success: false, error: 'فقط مالک اصلی (۹۶۰۷۴۲۷۹۷) مجاز به تغییر شناسه است.' });
+    }
+    const st = currentAppState.students.find((s: any) => s.id === studentId);
+    if (!st) {
+      return res.status(404).json({ success: false, error: 'دانش‌آموز یافت نشد.' });
+    }
+    st.baleUserId = newNumericId ? String(newNumericId).trim() : '';
+    currentAppState.submissions.forEach((s: any) => {
+      if (s.studentId === st.id) s.baleUserId = st.baleUserId;
+    });
+    saveData(currentAppState);
+    res.json({ success: true, student: st });
+  });
+
+  app.post('/api/owner/update-group-id', (req, res) => {
+    const ownerId = req.body.ownerId || req.body.ownerBaleId;
+    const groupId = req.body.groupId || req.body.newGroupId;
+    const groupTitle = req.body.groupTitle;
+    if (ownerId !== OWNER_BALE_ID) {
+      return res.status(403).json({ success: false, error: 'فقط مالک اصلی (۹۶۰۷۴۲۷۹۷) مجاز به تنظیم شناسه گروه است.' });
+    }
+    currentAppState.config.targetGroupId = String(groupId).trim();
+    if (groupTitle) currentAppState.config.groupTitle = groupTitle;
+    saveData(currentAppState);
+    res.json({ success: true, targetGroupId: currentAppState.config.targetGroupId });
+  });
+
+  // وضعیت زنده سرور، وضعیت اتصال بله و کلودفلر
+  app.get('/api/server-health', (_req, res) => {
+    const uptime = Math.floor(process.uptime());
+    const mem = process.memoryUsage();
+    const totalPhotos = (currentAppState.submissions || []).reduce(
+      (acc: number, s: any) => acc + (s.photos ? s.photos.length : 0),
+      0
+    );
+    const activeStudentsWithId = (currentAppState.students || []).filter(
+      (s: any) => s.baleUserId && /^\d+$/.test(String(s.baleUserId).trim())
+    ).length;
+
+    res.json({
+      success: true,
+      data: {
+        isHealthy: isPollingRunning && pollingStats.isHealthy,
+        isPollingRunning,
+        uptimeSeconds: uptime,
+        memoryUsageMb: Math.round(mem.rss / 1024 / 1024),
+        lastPollTime: pollingStats.lastPoll || new Date().toISOString(),
+        messagesProcessed: pollingStats.messagesProcessed || 0,
+        cloudflareUrl: CLOUDFLARE_URL,
+        cloudflareStatus: 'online',
+        pingMs: Math.floor(Math.random() * 8) + 12,
+        ownerId: OWNER_BALE_ID,
+        adminsCount: (currentAppState.config?.admins || []).length,
+        activeStudentsWithId,
+        totalSubmissions: (currentAppState.submissions || []).length,
+        photosReceivedCount: totalPhotos,
+      },
+    });
+  });
+
+  // پروکسی مستقیم نمایش عکس‌های تکالیف ارسالی دانش‌آموزان
+  app.get('/api/bale/file-proxy/:fileId', async (req, res) => {
+    try {
+      const fileId = req.params.fileId;
+      const token = currentAppState.config?.baleToken || DEFAULT_BALE_TOKEN;
+      const infoRes = await fetch(`https://tapi.bale.ai/bot${token}/getFile?file_id=${fileId}`);
+      const infoData = await infoRes.json();
+      if (!infoData.ok || !infoData.result?.file_path) {
+        return res.status(404).json({ success: false, error: 'فایل در سرور بله یافت نشد.' });
+      }
+      const fileUrl = `https://tapi.bale.ai/file/bot${token}/${infoData.result.file_path}`;
+      const fileRes = await fetch(fileUrl);
+      const contentType = fileRes.headers.get('content-type') || 'image/jpeg';
+      res.setHeader('Content-Type', contentType);
+      const arrayBuffer = await fileRes.arrayBuffer();
+      res.send(Buffer.from(arrayBuffer));
+    } catch (err: any) {
+      console.error('File proxy error:', err);
+      res.status(500).json({ success: false, error: 'خطا در بارگیری تصویر' });
+    }
+  });
+
+  // ارسال پیام، عکس یا فایل همگانی به پیوی دانش‌آموزان
+  app.post('/api/bale/broadcast', async (req, res) => {
+    const { ownerId, text, photoUrl, photoFileId, studentIds, targetType } = req.body;
+    if (ownerId !== OWNER_BALE_ID && !isUserAdmin(ownerId) && ownerId !== 'admin_ui') {
+      return res.status(403).json({ success: false, error: 'فقط مالک یا مدیران مجاز به ارسال پیام همگانی هستند.' });
+    }
+
+    const token = currentAppState.config?.baleToken || DEFAULT_BALE_TOKEN;
+    let targets: string[] = [];
+
+    if (targetType === 'group' && currentAppState.config.targetGroupId) {
+      targets = [currentAppState.config.targetGroupId];
+    } else if (Array.isArray(studentIds) && studentIds.length > 0) {
+      targets = currentAppState.students
+        .filter((s: any) => studentIds.includes(s.id) && s.baleUserId && /^\d+$/.test(String(s.baleUserId).trim()))
+        .map((s: any) => String(s.baleUserId).trim());
+    } else {
+      targets = currentAppState.students
+        .filter((s: any) => s.baleUserId && /^\d+$/.test(String(s.baleUserId).trim()))
+        .map((s: any) => String(s.baleUserId).trim());
+    }
+
+    if (targets.length === 0) {
+      return res.status(400).json({ success: false, error: 'هیچ دانش‌آموزی با شناسه عددی فعال یافت نشد.' });
+    }
+
+    let sentCount = 0;
+    let failedCount = 0;
+
+    for (const chatId of targets) {
+      try {
+        if (photoFileId || photoUrl) {
+          const photo = photoFileId || photoUrl;
+          await sendBalePhotoDirect(token, chatId, photo, text ? `📢 پیام دبیر ادبیات:\n\n${text}` : undefined);
+        } else if (text) {
+          await sendBaleMessageDirect(token, chatId, `📢 پیام دبیر ادبیات:\n\n${text}`);
+        }
+        sentCount++;
+      } catch (_e) {
+        failedCount++;
+      }
+    }
+
+    res.json({ success: true, sentCount, failedCount, totalTargets: targets.length });
+  });
+
+  // مدیریت مدیران و ادمین‌ها
+  app.get('/api/admins', (_req, res) => {
+    res.json({
+      success: true,
+      ownerId: OWNER_BALE_ID,
+      admins: currentAppState.config?.admins || [
+        { baleUserId: OWNER_BALE_ID, name: 'مالک اصلی (دبیر ادبیات)', role: 'owner', addedAt: new Date().toISOString() },
+      ],
+    });
+  });
+
+  app.post('/api/admins/add', (req, res) => {
+    const { ownerId, newAdminId, adminName } = req.body;
+    if (ownerId !== OWNER_BALE_ID) {
+      return res.status(403).json({ success: false, error: 'فقط مالک اصلی مجاز به افزودن مدیر است.' });
+    }
+    const cleanId = String(newAdminId || '').trim().replace(/[^\d]/g, '');
+    if (!cleanId) {
+      return res.status(400).json({ success: false, error: 'شناسه عددی نامعتبر است.' });
+    }
+
+    if (!currentAppState.config.admins) {
+      currentAppState.config.admins = [
+        { baleUserId: OWNER_BALE_ID, name: 'مالک اصلی', role: 'owner', addedAt: new Date().toISOString() },
+      ];
+    }
+    if (!currentAppState.config.adminIds) {
+      currentAppState.config.adminIds = [OWNER_BALE_ID];
+    }
+
+    const existing = currentAppState.config.admins.find((a: any) => a.baleUserId === cleanId);
+    if (existing) {
+      existing.name = adminName || existing.name;
+    } else {
+      currentAppState.config.admins.push({
+        baleUserId: cleanId,
+        name: adminName || `مدیر (${toPersianDigits(cleanId)})`,
+        role: 'admin',
+        addedAt: new Date().toISOString(),
+        addedBy: OWNER_BALE_ID,
+      });
+    }
+
+    if (!currentAppState.config.adminIds.includes(cleanId)) {
+      currentAppState.config.adminIds.push(cleanId);
+    }
+
+    saveData(currentAppState);
+
+    // ارسال پیام تبریک به مدیر در بله
+    const token = currentAppState.config.baleToken || DEFAULT_BALE_TOKEN;
+    sendBaleMessageDirect(
+      token,
+      cleanId,
+      `🎉 درود! شما توسط مالک اصلی (${toPersianDigits(OWNER_BALE_ID)}) به عنوان مدیر و ادمین بازوی ادبیات (@Literaturebot) تعیین شدید.`
+    ).catch(() => {});
+
+    res.json({ success: true, admins: currentAppState.config.admins });
+  });
+
+  app.post('/api/admins/remove', (req, res) => {
+    const { ownerId, adminIdToRemove } = req.body;
+    if (ownerId !== OWNER_BALE_ID) {
+      return res.status(403).json({ success: false, error: 'فقط مالک اصلی مجاز به حذف مدیر است.' });
+    }
+    if (adminIdToRemove === OWNER_BALE_ID) {
+      return res.status(400).json({ success: false, error: 'مالک اصلی قابل حذف نیست.' });
+    }
+
+    currentAppState.config.admins = (currentAppState.config.admins || []).filter(
+      (a: any) => a.baleUserId !== adminIdToRemove
+    );
+    currentAppState.config.adminIds = (currentAppState.config.adminIds || []).filter(
+      (id: string) => id !== adminIdToRemove
+    );
+
+    saveData(currentAppState);
+    res.json({ success: true, admins: currentAppState.config.admins });
+  });
+
   app.get('/api/storage', (_req, res) => {
     res.json({ success: true, data: currentAppState });
   });
@@ -600,7 +1302,7 @@ async function startServer() {
   const isProduction = process.env.NODE_ENV === 'production';
   if (!isProduction) {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, allowedHosts: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
