@@ -1,0 +1,6 @@
+{
+  "name": "ربات پشتیبان ادبیات | LiteratureBot",
+  "description": "سامانه هوشمند مدیریت و پایش پیشرفته تکالیف ادبیات در پیام‌رسان بله و وب با قابلیت تشخیص دقیق عبارات و گزارش‌گیری",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

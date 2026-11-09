@@ -1,0 +1,621 @@
+import express from 'express';
+import { createServer as createViteServer } from 'vite';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
+import { normalizePersianText, toPersianDigits, formatPersianDateTime, FORBIDDEN_SINGLE_WORDS } from './src/utils/textNormalizer.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const DATA_FILE = path.join(__dirname, 'literature_bot_data.json');
+const DEFAULT_BALE_TOKEN = '376421744:aUuvEsrmJtJZVtAqrk7uA5V9AlWR_bEtgpY';
+
+// دقیقاً ۱۱ دانش‌آموز اعلام‌شده توسط دبیر (بدون هیچ آیدی ساختگی یا فرضی)
+const DEFAULT_STUDENTS = [
+  { id: 'st-1', studentNumber: '۱', fullName: 'کیارش', classId: 'class-emla' },
+  { id: 'st-2', studentNumber: '۲', fullName: 'یلدا', classId: 'class-emla' },
+  { id: 'st-3', studentNumber: '۳', fullName: 'محمد شریفی', classId: 'class-emla' },
+  { id: 'st-4', studentNumber: '۴', fullName: 'کیانوش شمشکی', classId: 'class-emla' },
+  { id: 'st-5', studentNumber: '۵', fullName: 'یاسین', classId: 'class-emla' },
+  { id: 'st-6', studentNumber: '۶', fullName: 'معصومه', classId: 'class-emla' },
+  { id: 'st-7', studentNumber: '۷', fullName: 'کومار', classId: 'class-emla' },
+  { id: 'st-8', studentNumber: '۸', fullName: 'محمدعلی', classId: 'class-emla' },
+  { id: 'st-9', studentNumber: '۹', fullName: 'امید', classId: 'class-emla' },
+  { id: 'st-10', studentNumber: '۱۰', fullName: 'محمدرضا', classId: 'class-emla' },
+  { id: 'st-11', studentNumber: '۱۱', fullName: 'حسین', classId: 'class-emla' },
+];
+
+const INITIAL_DATA = {
+  config: {
+    baleToken: DEFAULT_BALE_TOKEN,
+    botUsername: '@Literaturebot',
+    botLink: 'ble.ir/Literaturebot',
+    targetGroupId: '-100123456789',
+    defaultTriggerPhrase: 'درود ارسال کردم',
+    adminPin: '1234',
+    autoCloseOnDeadline: true,
+    rejectForwards: true,
+    rejectQuotes: true,
+    activeClassId: 'class-emla',
+    activeAssignmentId: 'assign-emla',
+  },
+  classes: [
+    {
+      id: 'class-emla',
+      name: 'کلاس ادبیات و املا',
+      grade: 'ادبیات فارسی',
+      academicYear: '۱۴۰۳-۱۴۰۴',
+    },
+  ],
+  students: DEFAULT_STUDENTS,
+  assignments: [
+    {
+      id: 'assign-emla',
+      title: 'گزارش انجام املا',
+      subject: 'از فایل صوتی',
+      classId: 'class-emla',
+      createdAt: '2026-11-08T07:00:00Z',
+      deadline: 'تا ساعت ۱۰',
+      isOpen: true,
+      customTriggerPhrase: 'درود ارسال کردم',
+      description: 'املا از فایل صوتی - ارسال فقط با عبارت «درود ارسال کردم»',
+    },
+  ],
+  submissions: [],
+  logs: [],
+  lastUpdateId: 0,
+};
+
+let currentAppState = loadData() || INITIAL_DATA;
+
+function loadData() {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      const raw = fs.readFileSync(DATA_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed.students && parsed.students.some((s: any) => s.fullName === 'کیارش')) {
+        return parsed;
+      }
+    }
+  } catch (err) {
+    console.error('Error reading data file:', err);
+  }
+  return null;
+}
+
+function saveData(data: any) {
+  try {
+    currentAppState = data;
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Error writing data file:', err);
+  }
+}
+
+// فهرست جامع الگوها و نگارش‌های مختلف نام‌ها و ردیف‌های ۱۱ دانش‌آموز کلاس املا
+const STUDENT_MATCH_PATTERNS: Array<{ id: string; aliases: string[] }> = [
+  { id: 'st-1', aliases: ['کیارش', 'kiarash', '۱', '1', 'ردیف ۱', 'ردیف 1', 'شماره ۱', 'شماره 1'] },
+  { id: 'st-2', aliases: ['یلدا', 'yalda', '۲', '2', 'ردیف ۲', 'ردیف 2', 'شماره ۲', 'شماره 2'] },
+  { id: 'st-3', aliases: ['محمد شریفی', 'محمدشریفی', 'شریفی', 'mohammad sharifi', 'mohammadsharifi', 'sharifi', '۳', '3', 'ردیف ۳', 'ردیف 3', 'شماره ۳', 'شماره 3'] },
+  { id: 'st-4', aliases: ['کیانوش شمشکی', 'کیانوش', 'شمشکی', 'kianoush', 'shemshaki', '۴', '4', 'ردیف ۴', 'ردیف 4', 'شماره ۴', 'شماره 4'] },
+  { id: 'st-5', aliases: ['یاسین', 'yasin', 'یـاسین', '۵', '5', 'ردیف ۵', 'ردیف 5', 'شماره ۵', 'شماره 5'] },
+  { id: 'st-6', aliases: ['معصومه', 'masoumeh', 'masoomeh', '۶', '6', 'ردیف ۶', 'ردیف 6', 'شماره ۶', 'شماره 6'] },
+  { id: 'st-7', aliases: ['کومار', 'kumar', 'koomar', '۷', '7', 'ردیف ۷', 'ردیف 7', 'شماره ۷', 'شماره 7'] },
+  { id: 'st-8', aliases: ['محمدعلی', 'محمد علی', 'mohammadali', 'mohammad ali', '۸', '8', 'ردیف ۸', 'ردیف 8', 'شماره ۸', 'شماره 8'] },
+  { id: 'st-9', aliases: ['امید', 'omid', '۹', '9', 'ردیف ۹', 'ردیف 9', 'شماره ۹', 'شماره 9'] },
+  { id: 'st-10', aliases: ['محمدرضا', 'محمد رضا', 'mohammadreza', 'mohammad reza', '۱۰', '10', 'ردیف ۱۰', 'ردیف 10', 'شماره ۱۰', 'شماره 10'] },
+  { id: 'st-11', aliases: ['حسین', 'سید حسین', 'hossein', 'hosein', '۱۱', '11', 'ردیف ۱۱', 'ردیف 11', 'شماره ۱۱', 'شماره 11'] },
+];
+
+function findStudentSubInState(student: any, submissions: any[], assignmentId?: string) {
+  if (!submissions || !Array.isArray(submissions)) return undefined;
+  return submissions.find((s: any) => {
+    if (s.status === 'rejected') return false;
+    if (assignmentId && s.assignmentId && s.assignmentId !== assignmentId) return false;
+    if (s.studentId && (s.studentId === student.id || s.studentId === student.studentNumber)) return true;
+    if (student.baleUserId && s.baleUserId && String(student.baleUserId).trim() === String(s.baleUserId).trim()) return true;
+    if (s.studentName && student.fullName) {
+      const normSub = normalizePersianText(s.studentName);
+      const normSt = normalizePersianText(student.fullName);
+      if (normSub === normSt || normSub.includes(normSt) || normSt.includes(normSub)) return true;
+    }
+    return false;
+  });
+}
+
+// ساخت گزارش متنی - شامل ۱۱ دانش‌آموز اصلی و سایر کاربرانی که «درود ارسال کردم» فرستاده‌اند
+function buildReportText(state: any): string {
+  const students = [...(state.students || DEFAULT_STUDENTS)];
+  const submissions = state.submissions || [];
+  const assignment = state.assignments?.[0] || INITIAL_DATA.assignments[0];
+
+  // افزودن هر کاربر دیگری که پیام «درود ارسال کردم» فرستاده و ثبت شده است
+  submissions.forEach((sub: any) => {
+    if (sub.status === 'rejected') return false;
+    const exists = students.some((st: any) => {
+      return (
+        st.id === sub.studentId ||
+        (st.baleUserId && sub.baleUserId && String(st.baleUserId).trim() === String(sub.baleUserId).trim()) ||
+        st.fullName === sub.studentName
+      );
+    });
+    if (!exists) {
+      students.push({
+        id: sub.studentId || `st-user-${sub.baleUserId}`,
+        studentNumber: sub.studentNumber || toPersianDigits(students.length + 1),
+        fullName: sub.studentName || `کاربر (${toPersianDigits(sub.baleUserId || '')})`,
+        classId: assignment.classId,
+        baleUserId: sub.baleUserId,
+      });
+    }
+  });
+
+  let text = `📚 گزارش انجام املا🟢\n`;
+  text += `━━━━━━━━━━━━━━━━━━\n\n`;
+  text += `✅ دانش‌آموزانی که املا را انجام داده‌اند:\n\n`;
+
+  students.forEach((st: any, idx: number) => {
+    const num = toPersianDigits(idx + 1);
+    const sub = findStudentSubInState(st, submissions, assignment.id);
+    const hasSubmitted = !!sub && sub.status !== 'rejected';
+    // اگر تأیید شد سبز (🟢)، در غیر این صورت قرمز (🔴)
+    const mark = hasSubmitted ? ' 🟢' : ' 🔴';
+
+    text += `${num}. ${st.fullName}${mark}\n`;
+
+    // فقط و فقط اگر پیام فرستاده باشد، آیدی عددی واقعی بله نمایش داده شود
+    const rawNumericId = sub?.baleUserId || st.baleUserId;
+    if (rawNumericId && /^\d+$/.test(String(rawNumericId).trim())) {
+      text += `   🆔 شناسه عددی: ${toPersianDigits(rawNumericId)}\n`;
+    }
+    text += `\n`;
+  });
+
+  text += `━━━━━━━━━━━━━━━━━━\n`;
+  text += `🕙زمان: ${toPersianDigits(assignment.deadline || 'تا ساعت ۱۰')}\n`;
+  text += `🌟 وضعیت: ${assignment.isOpen ? '🔄' : '🔒 بسته شده'}\n`;
+  text += `📝 درس: ${assignment.subject || 'از فایل صوتی'}\n`;
+
+  return text.trim();
+}
+
+async function sendBaleMessageDirect(token: string, chatId: number | string, text: string) {
+  try {
+    const res = await fetch(`https://tapi.bale.ai/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text }),
+    });
+    return await res.json();
+  } catch (err) {
+    console.error('Error sending message to Bale:', err);
+    return null;
+  }
+}
+
+// پردازش هوشمند پیام‌ها و استخراج شناسه عددی فرستنده (Numeric from.id)
+async function processBaleUpdate(update: any, token: string) {
+  const msg = update.message || update.channel_post;
+  if (!msg || !msg.text) return;
+
+  const chatId = msg.chat?.id;
+  const from = msg.from || {};
+  const rawText = msg.text.trim();
+  const isForwarded = Boolean(msg.forward_from || msg.forward_date);
+  const isQuoted = Boolean(msg.reply_to_message);
+
+  if (!chatId) return;
+
+  // شناسه عددی واقعی کاربر در پیام‌رسان بله
+  const numericSenderId = String(from.id || chatId || '');
+
+  const activeAssignment = currentAppState.assignments?.[0] || INITIAL_DATA.assignments[0];
+  const triggerPhrase = activeAssignment.customTriggerPhrase || 'درود ارسال کردم';
+
+  // تابع کمکی برای تطابق دانش‌آموز بر اساس نام، شناسه عددی یا متن
+  function resolveStudent(identifier: string) {
+    const norm = normalizePersianText(identifier).toLowerCase();
+    for (const pattern of STUDENT_MATCH_PATTERNS) {
+      if (
+        pattern.aliases.some((a) => {
+          const normAlias = normalizePersianText(a).toLowerCase();
+          return norm === normAlias || norm.includes(normAlias) || normAlias.includes(norm);
+        })
+      ) {
+        return currentAppState.students.find((s: any) => s.id === pattern.id);
+      }
+    }
+    return currentAppState.students.find((s: any) => {
+      const normName = normalizePersianText(s.fullName);
+      return norm === normName || norm.includes(normName) || normName.includes(norm);
+    });
+  }
+
+  // ۱. دستور اتصال مستقیم نام با شناسه عددی: /من [نام] یا /name [نام]
+  if (rawText.startsWith('/من ') || rawText.startsWith('/name ') || /^(من|ردیف|شماره)\s+/i.test(rawText)) {
+    const requested = rawText.replace(/^(\/(من|name)|من|ردیف|شماره)\s+/, '').trim();
+    const matched = resolveStudent(requested);
+
+    if (matched) {
+      matched.baleUserId = numericSenderId;
+      saveData(currentAppState);
+      await sendBaleMessageDirect(
+        token,
+        chatId,
+        `✅ ${matched.fullName} گرامی، شناسه عددی شما (${toPersianDigits(numericSenderId)}) متصل شد.\nحالا با ارسال عبارت «${triggerPhrase}»، وضعیت شما در جدول سبز (🟢) می‌شود.`
+      );
+      return;
+    } else {
+      await sendBaleMessageDirect(
+        token,
+        chatId,
+        `نام یا شماره «${requested}» در فهرست ۱۱ دانش‌آموز کلاس یافت نشد. لطفاً شماره ردیف (۱ تا ۱۱) یا نام خود را ارسال کنید.`
+      );
+      return;
+    }
+  }
+
+  // ۲. دستورات سیستمی
+  if (rawText.startsWith('/')) {
+    const cmd = rawText.toLowerCase().split(' ')[0];
+    if (cmd === '/start') {
+      const welcome = `درود بر شما! بازوی پشتیبان ادبیات (@Literaturebot) همیشه روشن و فعال است 📚🟢\n\n` +
+        `🆔 شناسه عددی شما: ${toPersianDigits(numericSenderId)}\n` +
+        `📝 تکلیف جاری: «${activeAssignment.title}» (${activeAssignment.subject})\n` +
+        `⏰ مهلت ارسال: ${toPersianDigits(activeAssignment.deadline || 'تا ساعت ۱۰')}\n` +
+        `📌 برای ثبت تکلیف، فقط عبارت دقیق زیر را ارسال کنید:\n«${triggerPhrase}»\n\n` +
+        `دستورات موجود:\n• /report - صدور گزارش انجام املا با نمایش شناسه عددی\n• /list - فهرست اسامی کلاس\n• /من [نام یا شماره] - اتصال شناسه عددی شما (مثلاً: /من کیارش یا /من ۱)`;
+      await sendBaleMessageDirect(token, chatId, welcome);
+      return;
+    }
+
+    if (cmd === '/report') {
+      const report = buildReportText(currentAppState);
+      await sendBaleMessageDirect(token, chatId, report);
+      return;
+    }
+
+    if (cmd === '/reset') {
+      currentAppState.submissions = [];
+      saveData(currentAppState);
+      const resetMsg = `🔄 وضعیت تمامی ۱۱ دانش‌آموز صفر شد و به حالت قرمز (🔴) درآمد.\n\nاکنون برای ثبت دور جدید، ارسال مجدد عبارت دقیق زیر الزامی است تا سبز (🟢) شوند:\n«${triggerPhrase}»`;
+      await sendBaleMessageDirect(token, chatId, resetMsg);
+      return;
+    }
+
+    if (cmd === '/list') {
+      let listMsg = `📋 فهرست ۱۱ دانش‌آموز کلاس املا:\n\n`;
+      currentAppState.students.forEach((st: any, idx: number) => {
+        const idInfo = st.baleUserId ? ` (شناسه عددی: ${toPersianDigits(st.baleUserId)})` : '';
+        listMsg += `${toPersianDigits(idx + 1)}. ${st.fullName}${idInfo}\n`;
+      });
+      await sendBaleMessageDirect(token, chatId, listMsg);
+      return;
+    }
+
+    if (cmd === '/help') {
+      const helpMsg = `📖 راهنمای بازوی پشتیبان ادبیات (@Literaturebot):\n\n` +
+        `قانون اصلی:\nهیچ پیامی با تک‌کلمه (مانند «درود»، «ارسال» یا «کردم») ثبت نمی‌شود. فقط عبارت کامل «${triggerPhrase}» شناسایی خواهد شد.\n\n` +
+        `دستورات:\n/report - گزارش زنده املا با شناسه عددی\n/start - شروع و نمایش شناسه عددی شما\n/من [نام یا شماره] - اتصال شناسه به اسامی`;
+      await sendBaleMessageDirect(token, chatId, helpMsg);
+      return;
+    }
+  }
+
+  // ۳. تشخیص و تطابق دانش‌آموز
+  const fromName = `${from.first_name || ''} ${from.last_name || ''}`.trim() || from.first_name || '';
+  const fromUsername = from.username || '';
+
+  // الف: تطابق از روی شناسه عددی قبلاً ثبت‌شده
+  let matchedStudent = currentAppState.students.find((s: any) => s.baleUserId === numericSenderId);
+
+  // ب: تطابق از روی نام نمایشی در بله (مثلا کیارش، یلدا، محمدعلی، ...)
+  if (!matchedStudent && fromName) {
+    matchedStudent = resolveStudent(fromName);
+  }
+
+  // ج: تطابق از روی نام کاربری بله (Username)
+  if (!matchedStudent && fromUsername) {
+    matchedStudent = resolveStudent(fromUsername);
+  }
+
+  // د: تطابق اگر دانش‌آموز نام یا شماره خود را در متن پیام نوشته باشد (مثلا: «کیارش درود ارسال کردم» یا «۱ درود ارسال کردم»)
+  if (!matchedStudent) {
+    for (const pattern of STUDENT_MATCH_PATTERNS) {
+      if (pattern.aliases.some((a) => rawText.includes(a))) {
+        matchedStudent = currentAppState.students.find((s: any) => s.id === pattern.id);
+        break;
+      }
+    }
+  }
+
+  // ذخیره شناسه عددی واقعی دانش‌آموز در صورت تطابق
+  if (matchedStudent) {
+    matchedStudent.baleUserId = numericSenderId;
+  }
+
+  const studentDisplayName = matchedStudent ? matchedStudent.fullName : fromName || 'دانش‌آموز گرامی';
+
+  // ۴. بررسی پیام فوروارد شده یا نقل‌قول
+  if (isForwarded) {
+    await sendBaleMessageDirect(token, chatId, `⚠️ ${studentDisplayName} عزیز، پیام شما فوروارد شده است و طبق قوانین ربات به عنوان تکلیف ثبت نمی‌شود.`);
+    return;
+  }
+
+  if (isQuoted) {
+    await sendBaleMessageDirect(token, chatId, `⚠️ ${studentDisplayName} عزیز، پیام شما نقل‌قول شده است و پذیرفته نیست. لطفاً پیام را مستقیماً ارسال نمایید.`);
+    return;
+  }
+
+  // ۵. قانون منع تک‌کلمات
+  const normalized = normalizePersianText(rawText);
+  const words = normalized.split(/\s+/).filter(Boolean);
+
+  if (words.length === 1 && FORBIDDEN_SINGLE_WORDS.has(words[0])) {
+    await sendBaleMessageDirect(
+      token,
+      chatId,
+      `⚠️ پیام شما ثبت نشد!\nقانون اصلی: تک‌کلمه «${words[0]}» نادیده گرفته می‌شود. لطفاً عبارت کامل «${triggerPhrase}» را بفرستید.`
+    );
+    return;
+  }
+
+  // ۶. بررسی وجود عبارت هدف «درود ارسال کردم»
+  const normalizedTrigger = normalizePersianText(triggerPhrase);
+  const isMatch = normalized.includes(normalizedTrigger);
+
+  if (isMatch) {
+    const nowTime = formatPersianDateTime();
+
+    // ثبت کاربر جدید در صورتی که در ۱۱ دانش‌آموز کلاس نباشد تا در جدول و گزارش هم سبز (🟢) نشان داده شود
+    if (!matchedStudent) {
+      const nextNum = String(currentAppState.students.length + 1);
+      const newParticipant = {
+        id: `st-user-${numericSenderId}`,
+        studentNumber: toPersianDigits(nextNum),
+        fullName: fromName ? fromName : `کاربر (${toPersianDigits(numericSenderId)})`,
+        classId: activeAssignment.classId || 'class-emla',
+        baleUserId: numericSenderId,
+      };
+      currentAppState.students.push(newParticipant);
+      matchedStudent = newParticipant;
+    } else {
+      matchedStudent.baleUserId = numericSenderId;
+    }
+
+    const studentDisplayName = matchedStudent.fullName;
+    const stId = matchedStudent.id;
+
+    // به‌روزرسانی یا ایجاد رکورد تکلیف
+    const existingIndex = currentAppState.submissions.findIndex(
+      (s: any) => s.studentId === stId || s.baleUserId === numericSenderId
+    );
+
+    const newSub = {
+      id: `sub-${Date.now()}`,
+      assignmentId: activeAssignment.id,
+      studentId: stId,
+      studentName: studentDisplayName,
+      studentNumber: matchedStudent.studentNumber || '—',
+      baleUserId: numericSenderId, // شناسه عددی واقعی ذخیره می‌شود
+      submittedAt: new Date().toISOString(),
+      jalaliTime: nowTime,
+      status: 'approved', // وضعیت تأیید شده سبز 🟢
+      rawMessage: rawText,
+    };
+
+    if (existingIndex >= 0) {
+      currentAppState.submissions[existingIndex] = newSub;
+    } else {
+      currentAppState.submissions.push(newSub);
+    }
+
+    currentAppState.logs.unshift({
+      id: `log-${Date.now()}`,
+      timestamp: nowTime,
+      senderName: studentDisplayName,
+      senderId: numericSenderId,
+      rawText: rawText,
+      result: {
+        isValid: true,
+        detailedCode: 'VALID_TRIGGER',
+        reason: `تکلیف ${studentDisplayName} با شناسه عددی ${numericSenderId} دریافت و ثبت شد`,
+        normalizedText: normalized,
+      },
+    });
+
+    saveData(currentAppState);
+
+    // پاسخ با ذکر نام و شناسه عددی واقعی
+    const confirmMsg = `✅ درود ${studentDisplayName} عزیز! تکلیف املای شما با موفقیت ثبت شد و وضعیت شما در جدول سبز (🟢) گردید.\n` +
+      `🆔 شناسه عددی ثبت‌شده شما: ${toPersianDigits(numericSenderId)}\n` +
+      `⏰ زمان ثبت: ${toPersianDigits(nowTime)}\n\n` +
+      `جهت مشاهده گزارش کلاسی دستور /report را ارسال نمایید.`;
+    await sendBaleMessageDirect(token, chatId, confirmMsg);
+  } else {
+    // اگر کاربر شماره ردیف فرستاد و قبلا پیام نداده بود، می‌توانیم شناسه او را وصل کنیم
+    if (/^([1-9]|10|11|۱|۲|۳|۴|۵|۶|۷|۸|۹|۱۰|۱۱)$/.test(rawText.trim())) {
+      const numStudent = resolveStudent(rawText.trim());
+      if (numStudent) {
+        numStudent.baleUserId = numericSenderId;
+        saveData(currentAppState);
+        await sendBaleMessageDirect(
+          token,
+          chatId,
+          `✅ ${numStudent.fullName} عزیز! شناسه عددی شما (${toPersianDigits(numericSenderId)}) ثبت شد.\nحالا عبارت «${triggerPhrase}» را بفرستید تا وضعیت شما در جدول سبز (🟢) شود.`
+        );
+        return;
+      }
+    }
+
+    // کلمات دیگر کاملاً نادیده گرفته می‌شوند و ثبت نمی‌شوند (قانون کاربر)
+    const hasPartial = ['درود', 'ارسال', 'کردم', 'سلام', 'تکلیف', 'استاد'].filter(w => words.includes(w));
+    if (hasPartial.length > 0 || words.length === 1) {
+      await sendBaleMessageDirect(
+        token,
+        chatId,
+        `⚠️ پیام شما به عنوان تکلیف ثبت نشد!\nقانون اصلی: کلمات دیگر نادیده گرفته می‌شوند. فقط پیام شامل عبارت کامل «${triggerPhrase}» ثبت می‌شود و وضعیت شما را سبز (🟢) می‌کند.`
+      );
+    }
+  }
+}
+
+// موتور ۲۴ ساعته پایش پیام‌ها
+let isPollingRunning = false;
+let lastUpdateId = currentAppState.lastUpdateId || 0;
+let pollingStats = {
+  startedAt: new Date().toISOString(),
+  lastPoll: new Date().toISOString(),
+  messagesProcessed: 0,
+  isHealthy: true,
+  lastError: null as string | null,
+};
+
+async function startBalePollingDaemon(token: string) {
+  if (isPollingRunning) return;
+  isPollingRunning = true;
+  console.log(`[Bale Bot Daemon] Starting 24/7 polling with numeric ID tracking...`);
+
+  try {
+    await fetch(`https://tapi.bale.ai/bot${token}/deleteWebhook`);
+  } catch (_e) {}
+
+  while (isPollingRunning) {
+    try {
+      pollingStats.lastPoll = new Date().toISOString();
+      const url = new URL(`https://tapi.bale.ai/bot${token}/getUpdates`);
+      if (lastUpdateId > 0) {
+        url.searchParams.set('offset', String(lastUpdateId + 1));
+      }
+      url.searchParams.set('limit', '50');
+      url.searchParams.set('timeout', '20');
+
+      const response = await fetch(url.toString(), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Bale HTTP status ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data && data.ok && Array.isArray(data.result)) {
+        pollingStats.isHealthy = true;
+        pollingStats.lastError = null;
+
+        for (const update of data.result) {
+          if (update.update_id) {
+            lastUpdateId = Math.max(lastUpdateId, update.update_id);
+            currentAppState.lastUpdateId = lastUpdateId;
+          }
+          pollingStats.messagesProcessed++;
+          await processBaleUpdate(update, token);
+        }
+
+        if (data.result.length > 0) {
+          saveData(currentAppState);
+        }
+      } else if (data && !data.ok) {
+        pollingStats.lastError = data.description || 'Bale API responded with ok:false';
+        await new Promise(r => setTimeout(r, 3000));
+      }
+    } catch (err: any) {
+      pollingStats.isHealthy = false;
+      pollingStats.lastError = err.message || 'Network error';
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+}
+
+async function startServer() {
+  const app = express();
+  const PORT = 3000;
+
+  app.use(express.json());
+
+  startBalePollingDaemon(DEFAULT_BALE_TOKEN).catch(err => {
+    console.error('Error in Bale Polling Daemon:', err);
+  });
+
+  app.get('/api/bale/live-status', (_req, res) => {
+    res.json({
+      success: true,
+      data: {
+        isPollingRunning,
+        lastUpdateId,
+        stats: pollingStats,
+        tokenPrefix: DEFAULT_BALE_TOKEN.slice(0, 10) + '...',
+        activeStudentsCount: currentAppState.students?.length || 0,
+        submissionsCount: currentAppState.submissions?.length || 0,
+      },
+    });
+  });
+
+  app.post('/api/bale/restart-polling', (req, res) => {
+    const token = req.body?.token || DEFAULT_BALE_TOKEN;
+    isPollingRunning = false;
+    setTimeout(() => {
+      startBalePollingDaemon(token);
+    }, 500);
+    res.json({ success: true, message: 'Bale polling daemon restarted.' });
+  });
+
+  app.get('/api/bale/status', async (req, res) => {
+    const token = (req.query.token as string) || DEFAULT_BALE_TOKEN;
+    try {
+      const response = await fetch(`https://tapi.bale.ai/bot${token}/getMe`, {
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await response.json();
+      return res.json({ success: true, data });
+    } catch (err: any) {
+      return res.json({ success: false, error: err.message || 'خطا در ارتباط با سرور بله' });
+    }
+  });
+
+  app.post('/api/bale/sendMessage', async (req, res) => {
+    const { token, chatId, text } = req.body;
+    const botToken = token || DEFAULT_BALE_TOKEN;
+    if (!chatId || !text) {
+      return res.status(400).json({ success: false, error: 'chatId و text الزامی هستند' });
+    }
+    const data = await sendBaleMessageDirect(botToken, chatId, text);
+    if (data && data.ok) {
+      return res.json({ success: true, data: data.result });
+    }
+    return res.json({ success: false, error: data?.description || 'خطا در ارسال پیام' });
+  });
+
+  app.get('/api/storage', (_req, res) => {
+    res.json({ success: true, data: currentAppState });
+  });
+
+  app.post('/api/storage', (req, res) => {
+    saveData(req.body);
+    res.json({ success: true });
+  });
+
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (!isProduction) {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    app.use(express.static(path.join(__dirname, 'dist')));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+    });
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Literature Bot Server running at http://0.0.0.0:${PORT}`);
+  });
+}
+
+startServer().catch((err) => {
+  console.error('Failed to start server:', err);
+});
